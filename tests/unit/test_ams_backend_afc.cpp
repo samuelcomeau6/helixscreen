@@ -5125,6 +5125,48 @@ TEST_CASE("AFC change_tool sends T{n} in single-extruder mode", "[ams][afc][tool
     REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
 }
 
+TEST_CASE("AFC change_tool mounts a seated lane's own head on a toolchanger",
+          "[ams][afc][toolchanger][seated]") {
+    // U1 + ViViD shape: lane1 is T0 but lives on extruder3, so the head comes from
+    // the lane's extruder, never from the T number's position.
+    auto make = [](bool toolchanger, bool seated) {
+        auto helper = std::make_unique<AmsBackendAfcTestHelper>();
+        helper->initialize_test_lanes_with_slots(4);
+        helper->set_running(true);
+        if (toolchanger) {
+            helper->setup_toolchanger(4);
+        } else {
+            helper->setup_multi_extruder_no_toolchanger(4);
+        }
+        helper->feed_afc_stepper("lane1", {{"map", "T0"},
+                                           {"extruder", "extruder3"},
+                                           {"tool_loaded", seated},
+                                           {"status", seated ? "Tooled" : "Loaded"}});
+        return helper;
+    };
+
+    SECTION("seated lane -> AFC_SELECT_TOOL with the lane's extruder, no filament change") {
+        auto helper = make(true, true);
+        REQUIRE(helper->change_tool(0));
+        REQUIRE(helper->has_gcode("AFC_SELECT_TOOL TOOL=extruder3"));
+        REQUIRE_FALSE(helper->has_gcode("T0"));
+    }
+
+    SECTION("lane not seated -> T{n}, a real filament change") {
+        auto helper = make(true, false);
+        REQUIRE(helper->change_tool(0));
+        REQUIRE(helper->has_gcode("T0"));
+        REQUIRE_FALSE(helper->has_gcode_starting_with("AFC_SELECT_TOOL"));
+    }
+
+    SECTION("seated lane without a toolchanger -> T{n}") {
+        auto helper = make(false, true);
+        REQUIRE(helper->change_tool(0));
+        REQUIRE(helper->has_gcode("T0"));
+        REQUIRE_FALSE(helper->has_gcode_starting_with("AFC_SELECT_TOOL"));
+    }
+}
+
 TEST_CASE("AFC change_tool sends T0 for tool zero in toolchanger mode",
           "[ams][afc][toolchanger]") {
     AmsBackendAfcTestHelper helper;
