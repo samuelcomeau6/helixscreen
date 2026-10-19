@@ -5295,9 +5295,9 @@ AmsError AmsBackendAfc::do_select_slot(int slot_index) {
 }
 
 AmsError AmsBackendAfc::do_change_tool(int tool_number) {
-    // The Klipper extruder of the lane mapped to this T number, when that lane
-    // is already seated in its own toolhead. Empty otherwise.
-    std::string seated_extruder;
+    // The Klipper extruder of the lane mapped to this T number. Empty when no lane
+    // carries the T number or AFC has not reported the lane's extruder yet.
+    std::string lane_extruder;
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -5308,9 +5308,7 @@ AmsError AmsBackendAfc::do_change_tool(int tool_number) {
         for (int i = 0; i < slots_.slot_count(); ++i) {
             const auto* entry = slots_.get(i);
             if (entry && entry->info.mapped_tool == tool_number) {
-                if (entry->info.status == SlotStatus::LOADED) {
-                    seated_extruder = entry->info.extruder_name;
-                }
+                lane_extruder = entry->info.extruder_name;
                 break;
             }
         }
@@ -5319,14 +5317,19 @@ AmsError AmsBackendAfc::do_change_tool(int tool_number) {
     // @p tool_number is a T number, not a toolhead index: AFC registers one
     // T-command per lane from the lane's `map`, and SET_MAP can move it to any lane.
     //
-    // A lane already seated in its head on a toolchanger only needs that head
-    // mounted: AFC_SELECT_TOOL by the lane's own extruder, which moves no filament.
-    // T{n} would run AFC's CHANGE_TOOL, which unloads the current lane before
-    // loading this one. Every other case is a filament change, and T{n} lets AFC
-    // route it through the lane's extruder.
+    // On a toolchanger a tool change mounts the head and moves no filament:
+    // AFC_SELECT_TOOL by the lane's own extruder. T{n} would run AFC's CHANGE_TOOL,
+    // which unloads the current lane and loads this one; filament moves only from
+    // load_filament(). With no toolchanger there is a single head, so a tool change
+    // is a filament change and T{n} is the request.
     std::string cmd;
-    if (!seated_extruder.empty() && has_toolchanger()) {
-        cmd = "AFC_SELECT_TOOL TOOL=" + seated_extruder;
+    if (has_toolchanger()) {
+        if (lane_extruder.empty()) {
+            return AmsErrorHelper::invalid_parameter(
+                "T" + std::to_string(tool_number) +
+                " has no lane with a known extruder; cannot choose a toolhead");
+        }
+        cmd = "AFC_SELECT_TOOL TOOL=" + lane_extruder;
     } else {
         cmd = "T" + std::to_string(tool_number);
     }

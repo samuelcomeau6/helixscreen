@@ -322,12 +322,13 @@ TEST_CASE("AFC dispatches lane and T-number commands from the status payload alo
         CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 
-    SECTION("change_tool sends T{n} on a toolchanger frame") {
+    SECTION("change_tool on a toolchanger frame never sends T{n}") {
+        // No lane in this frame names its extruder, so there is no head to mount.
         AfcStatusDispatchHelper afc;
         afc.feed_afc(toolchanger_status());
 
-        REQUIRE(afc.change_tool(1));
-        CHECK(afc.sent("T1"));
+        CHECK_FALSE(afc.change_tool(1));
+        CHECK_FALSE(afc.sent("T1"));
         CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 
@@ -380,16 +381,16 @@ TEST_CASE("AFC dispatches lane and T-number commands from the status payload alo
     }
 
     SECTION("change_tool never resolves a T number through the extruder order") {
-        // A T number belongs to a lane, not to a position in the extruder list,
-        // so reordering the extruders must not change the command.
+        // A T number belongs to a lane, not to a position in the extruder list, so
+        // with no lane naming its extruder the first extruder must not be chosen.
         AfcStatusDispatchHelper afc;
         nlohmann::json frame = toolchanger_status();
         frame["extruders"] = nlohmann::json::array({"extruder_b", "extruder_a"});
         afc.feed_afc(frame);
 
-        REQUIRE(afc.change_tool(0));
-        CHECK(afc.sent("T0"));
+        CHECK_FALSE(afc.change_tool(0));
         CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
+        CHECK_FALSE(afc.sent("T0"));
     }
 }
 
