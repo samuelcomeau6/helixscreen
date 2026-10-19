@@ -5224,32 +5224,16 @@ AmsError AmsBackendAfc::do_load_filament(int slot_index) {
         }
     }
 
-    // Toolchanger mode: use AFC_SELECT_TOOL with extruder name.
+    // CHANGE_TOOL LANE={name} on every topology, toolchangers included.
     //
-    // Gated on a toolchanger EXISTING (see has_toolchanger() for the two
-    // signals), not on the extruder count. AFC_SELECT_TOOL is registered by
-    // AfcToolchanger.__init__ and nowhere else (AFC_Toolchanger.py:47-49), a
-    // file that exists only from v1.2.0 and that Klipper only loads for an
-    // `[AFC_Toolchanger <name>]` section. An IDEX or standalone-toolhead machine
-    // has several [AFC_extruder] sections and no toolchanger, so
-    // `num_extruders_ > 1` was true there and the command came back
-    // `// Unknown command:"AFC_SELECT_TOOL"` with the load never happening.
-    if (has_toolchanger()) {
-        const auto* entry = slots_.get(slot_index);
-        int tool = entry ? entry->info.mapped_tool : slot_index;
-        if (tool >= 0 && tool < static_cast<int>(extruders_.size())) {
-            std::string cmd = "AFC_SELECT_TOOL TOOL=" + extruders_[tool].name;
-            spdlog::info("[AMS AFC] Loading slot {} via toolchanger: {}", slot_index, cmd);
-            return dispatch_operation(std::move(cmd), AmsAction::LOADING);
-        }
-    }
-
-    // Standard mode: CHANGE_TOOL LANE={name}.
-    //
-    // Also the correct fallback for a multi-extruder machine with no toolchanger
-    // unit: CHANGE_TOOL resolves the lane's own extruder object
-    // (cur_lane.extruder_obj) and loads through it, so naming the LANE is
-    // sufficient and needs no per-tool selection verb.
+    // CHANGE_TOOL resolves the lane's own extruder object (cur_lane.extruder_obj)
+    // and TOOL_LOAD swaps to that toolhead first when it is not the active one
+    // (AFC.py TOOL_LOAD: `if get_current_extruder() != extruder_obj.th_extruder_name:
+    // tool_swap()`). The lane-to-extruder relation lives only in AFC, so naming the
+    // lane is the one request that cannot pick the wrong head. AFC_SELECT_TOOL is
+    // not a load: it mounts a toolhead by extruder name and moves no filament, and a
+    // lane's T number is not an index into the extruder list (a U1 with a ViViD maps
+    // lane1 to T0 on e3).
     std::string cmd = "CHANGE_TOOL LANE=" + lane_name;
 
     spdlog::info("[AMS AFC] Loading from lane {} (slot {})", lane_name, slot_index);
@@ -5319,19 +5303,12 @@ AmsError AmsBackendAfc::do_change_tool(int tool_number) {
         }
     }
 
-    std::string cmd;
-    if (has_toolchanger() && tool_number < static_cast<int>(extruders_.size())) {
-        // Toolchanger mode: use AFC_SELECT_TOOL with extruder name. See
-        // load_filament() for why the gate is the unit type and not the
-        // extruder count (AFC_Toolchanger.py:47-49, v1.2.0 only).
-        cmd = "AFC_SELECT_TOOL TOOL=" + extruders_[tool_number].name;
-    } else {
-        // Standard mode: use T{n}. Correct for a multi-extruder machine with no
-        // toolchanger too — AFC's TcmdAssign registers a T-command per lane on
-        // every topology, and cmd_CHANGE_TOOL routes it through the lane's own
-        // extruder object.
-        cmd = "T" + std::to_string(tool_number);
-    }
+    // T{n} on every topology. @p tool_number is a T number, not a toolhead index:
+    // AFC registers one T-command per lane from the lane's `map`, cmd_CHANGE_TOOL
+    // routes it through that lane's own extruder object, and TOOL_LOAD swaps
+    // toolheads when needed. SET_MAP can move any T number to any lane, so only
+    // AFC can resolve which head a T number lands on.
+    std::string cmd = "T" + std::to_string(tool_number);
 
     spdlog::info("[AMS AFC] Tool change: {}", cmd);
     // SELECTING, not LOADING: every AFC toolchanger state (ToolSwap, ToolDock,

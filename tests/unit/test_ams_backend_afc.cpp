@@ -5096,10 +5096,10 @@ TEST_CASE_METHOD(LVGLTestFixture, "SettingsManager afc_unload_after_print round-
 }
 
 // ============================================================================
-// Toolchanger mode: AFC_SELECT_TOOL / AFC_UNSELECT_TOOL
+// Toolchanger mode: T{n} and CHANGE_TOOL, never AFC_SELECT_TOOL
 // ============================================================================
 
-TEST_CASE("AFC change_tool sends AFC_SELECT_TOOL in toolchanger mode", "[ams][afc][toolchanger]") {
+TEST_CASE("AFC change_tool sends T{n} in toolchanger mode", "[ams][afc][toolchanger]") {
     AmsBackendAfcTestHelper helper;
     helper.initialize_test_lanes_with_slots(4);
     helper.set_running(true);
@@ -5108,7 +5108,8 @@ TEST_CASE("AFC change_tool sends AFC_SELECT_TOOL in toolchanger mode", "[ams][af
     auto result = helper.change_tool(1);
 
     REQUIRE(result);
-    REQUIRE(helper.has_gcode("AFC_SELECT_TOOL TOOL=extruder1"));
+    REQUIRE(helper.has_gcode("T1"));
+    REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
 }
 
 TEST_CASE("AFC change_tool sends T{n} in single-extruder mode", "[ams][afc][toolchanger]") {
@@ -5124,7 +5125,7 @@ TEST_CASE("AFC change_tool sends T{n} in single-extruder mode", "[ams][afc][tool
     REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
 }
 
-TEST_CASE("AFC change_tool sends AFC_SELECT_TOOL with first extruder name",
+TEST_CASE("AFC change_tool sends T0 for tool zero in toolchanger mode",
           "[ams][afc][toolchanger]") {
     AmsBackendAfcTestHelper helper;
     helper.initialize_test_lanes_with_slots(4);
@@ -5134,11 +5135,15 @@ TEST_CASE("AFC change_tool sends AFC_SELECT_TOOL with first extruder name",
     auto result = helper.change_tool(0);
 
     REQUIRE(result);
-    REQUIRE(helper.has_gcode("AFC_SELECT_TOOL TOOL=extruder"));
+    REQUIRE(helper.has_gcode("T0"));
+    REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
 }
 
-TEST_CASE("AFC load_filament sends AFC_SELECT_TOOL in toolchanger mode",
+TEST_CASE("AFC load_filament sends CHANGE_TOOL LANE in toolchanger mode",
           "[ams][afc][toolchanger]") {
+    // A lane's T number is not an index into the extruder list, and AFC_SELECT_TOOL
+    // mounts a head without loading the lane. CHANGE_TOOL names the lane and lets AFC
+    // swap to that lane's own extruder.
     AmsBackendAfcTestHelper helper;
     helper.initialize_test_lanes_with_slots(4);
     helper.set_running(true);
@@ -5147,8 +5152,8 @@ TEST_CASE("AFC load_filament sends AFC_SELECT_TOOL in toolchanger mode",
     auto result = helper.load_filament(1);
 
     REQUIRE(result);
-    REQUIRE(helper.has_gcode("AFC_SELECT_TOOL TOOL=extruder1"));
-    REQUIRE_FALSE(helper.has_gcode_starting_with("CHANGE_TOOL"));
+    REQUIRE(helper.has_gcode("CHANGE_TOOL LANE=lane2"));
+    REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
 }
 
 TEST_CASE("AFC load_filament sends CHANGE_TOOL in single-extruder mode",
@@ -5194,9 +5199,9 @@ TEST_CASE("AFC multi-extruder WITHOUT a toolchanger never sends AFC_SELECT_TOOL"
         REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
     }
 
-    SECTION("the SAME machine plus a toolchanger section does tool-select") {
-        // Both halves of the branch off one fixture: the only difference is the
-        // toolchanger, which is exactly what the gate is supposed to key on.
+    SECTION("the SAME machine plus a toolchanger section still sends T{n}") {
+        // Adding the toolchanger must not change the command: AFC resolves the T
+        // number to a lane and swaps heads itself.
         AmsBackendAfcTestHelper helper;
         helper.initialize_test_lanes_with_slots(4);
         helper.set_running(true);
@@ -5204,8 +5209,8 @@ TEST_CASE("AFC multi-extruder WITHOUT a toolchanger never sends AFC_SELECT_TOOL"
         helper.seed_configfile_toolchanger(true);
 
         REQUIRE(helper.change_tool(1));
-        REQUIRE(helper.has_gcode("AFC_SELECT_TOOL TOOL=extruder1"));
-        REQUIRE_FALSE(helper.has_gcode("T1"));
+        REQUIRE(helper.has_gcode("T1"));
+        REQUIRE_FALSE(helper.has_gcode_starting_with("AFC_SELECT_TOOL"));
     }
 }
 
@@ -8099,7 +8104,7 @@ TEST_CASE("AFC toolchanger detection", "[ams][afc][toolchanger][select_tool]") {
     }
 }
 
-TEST_CASE("AFC load_filament only uses AFC_SELECT_TOOL on a toolchanger",
+TEST_CASE("AFC load_filament sends CHANGE_TOOL LANE on every topology",
           "[ams][afc][toolchanger][select_tool]") {
     SECTION("multi-extruder, NO toolchanger unit -> CHANGE_TOOL") {
         AfcDispatchAckHelper h;
@@ -8113,14 +8118,14 @@ TEST_CASE("AFC load_filament only uses AFC_SELECT_TOOL on a toolchanger",
         REQUIRE(h.sent()[0] == "CHANGE_TOOL LANE=lane3");
     }
 
-    SECTION("toolchanger unit present -> AFC_SELECT_TOOL") {
+    SECTION("toolchanger unit present -> CHANGE_TOOL") {
         AfcDispatchAckHelper h;
         h.feed_afc({{"units", {"Toolchanger TC_1"}},
                     {"extruders", {"extruder", "extruder1", "extruder2", "extruder3"}}});
 
         REQUIRE(h.load_filament(2).success());
         REQUIRE(h.sent().size() == 1);
-        REQUIRE(h.sent()[0] == "AFC_SELECT_TOOL TOOL=extruder2");
+        REQUIRE(h.sent()[0] == "CHANGE_TOOL LANE=lane3");
     }
 
     SECTION("single extruder, no units -> CHANGE_TOOL") {
@@ -8130,18 +8135,18 @@ TEST_CASE("AFC load_filament only uses AFC_SELECT_TOOL on a toolchanger",
     }
 
     SECTION("lane-fed toolchanger: no Toolchanger unit, but configfile has the section") {
-        // The topology the units array cannot see. Must still tool-select.
+        // A lane on a toolchanger loads by name too: AFC swaps to its extruder.
         AfcDispatchAckHelper h;
         h.seed_configfile_toolchanger(true);
         h.feed_afc({{"units", {"Box_Turtle Turtle_1"}},
                     {"extruders", {"extruder", "extruder1", "extruder2", "extruder3"}}});
 
         REQUIRE(h.load_filament(2).success());
-        REQUIRE(h.sent()[0] == "AFC_SELECT_TOOL TOOL=extruder2");
+        REQUIRE(h.sent()[0] == "CHANGE_TOOL LANE=lane3");
     }
 }
 
-TEST_CASE("AFC change_tool only uses AFC_SELECT_TOOL on a toolchanger",
+TEST_CASE("AFC change_tool sends T<n> on every topology",
           "[ams][afc][toolchanger][select_tool]") {
     SECTION("multi-extruder, NO toolchanger unit -> T<n>") {
         AfcDispatchAckHelper h;
@@ -8152,13 +8157,13 @@ TEST_CASE("AFC change_tool only uses AFC_SELECT_TOOL on a toolchanger",
         REQUIRE(h.sent()[0] == "T2");
     }
 
-    SECTION("toolchanger unit present -> AFC_SELECT_TOOL") {
+    SECTION("toolchanger unit present -> T<n>") {
         AfcDispatchAckHelper h;
         h.feed_afc({{"units", {"Toolchanger TC_1"}},
                     {"extruders", {"extruder", "extruder1", "extruder2", "extruder3"}}});
 
         REQUIRE(h.change_tool(2).success());
-        REQUIRE(h.sent()[0] == "AFC_SELECT_TOOL TOOL=extruder2");
+        REQUIRE(h.sent()[0] == "T2");
     }
 
     SECTION("lane-fed toolchanger: configfile section, no Toolchanger unit") {
@@ -8168,7 +8173,7 @@ TEST_CASE("AFC change_tool only uses AFC_SELECT_TOOL on a toolchanger",
                     {"extruders", {"extruder", "extruder1", "extruder2", "extruder3"}}});
 
         REQUIRE(h.change_tool(2).success());
-        REQUIRE(h.sent()[0] == "AFC_SELECT_TOOL TOOL=extruder2");
+        REQUIRE(h.sent()[0] == "T2");
     }
 }
 

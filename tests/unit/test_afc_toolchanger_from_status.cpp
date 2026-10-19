@@ -300,15 +300,15 @@ nlohmann::json multi_extruder_no_toolchanger_status() {
 
 } // namespace
 
-TEST_CASE("AFC_SELECT_TOOL dispatches from the status payload alone (#1200)",
+TEST_CASE("AFC dispatches lane and T-number commands from the status payload alone (#1200)",
           "[ams][afc][toolchanger][status][1200]") {
-    SECTION("load_filament routes through the toolchanger on a toolchanger frame") {
+    SECTION("load_filament names the lane on a toolchanger frame") {
         AfcStatusDispatchHelper afc;
         afc.feed_afc(toolchanger_status());
 
         REQUIRE(afc.load_filament(1));
-        CHECK(afc.sent("AFC_SELECT_TOOL TOOL=extruder1"));
-        CHECK_FALSE(afc.sent_starting_with("CHANGE_TOOL"));
+        CHECK(afc.sent("CHANGE_TOOL LANE=lane2"));
+        CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 
     SECTION("load_filament falls back to CHANGE_TOOL on a single-extruder frame") {
@@ -322,13 +322,13 @@ TEST_CASE("AFC_SELECT_TOOL dispatches from the status payload alone (#1200)",
         CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 
-    SECTION("change_tool routes through the toolchanger on a toolchanger frame") {
+    SECTION("change_tool sends T{n} on a toolchanger frame") {
         AfcStatusDispatchHelper afc;
         afc.feed_afc(toolchanger_status());
 
         REQUIRE(afc.change_tool(1));
-        CHECK(afc.sent("AFC_SELECT_TOOL TOOL=extruder1"));
-        CHECK_FALSE(afc.sent("T1"));
+        CHECK(afc.sent("T1"));
+        CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 
     SECTION("change_tool falls back to T{n} on a single-extruder frame") {
@@ -375,22 +375,21 @@ TEST_CASE("AFC_SELECT_TOOL dispatches from the status payload alone (#1200)",
         afc.feed_afc(multi_extruder_no_toolchanger_status());
 
         REQUIRE(afc.load_filament(1));
-        CHECK(afc.sent("AFC_SELECT_TOOL TOOL=extruder1"));
-        CHECK_FALSE(afc.sent_starting_with("CHANGE_TOOL"));
+        CHECK(afc.sent("CHANGE_TOOL LANE=lane2"));
+        CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 
-    SECTION("tool number indexes extruders_ positionally, not by name order") {
-        // AFC emits the array in tool order and extruders_ is indexed as a tool
-        // number, so T0 must be the FIRST name in the frame even when a later
-        // name sorts ahead of it. The webhook parse sorts its map keys; the
-        // status parse must not, or T0 and T1 silently swap.
+    SECTION("change_tool never resolves a T number through the extruder order") {
+        // A T number belongs to a lane, not to a position in the extruder list,
+        // so reordering the extruders must not change the command.
         AfcStatusDispatchHelper afc;
         nlohmann::json frame = toolchanger_status();
         frame["extruders"] = nlohmann::json::array({"extruder_b", "extruder_a"});
         afc.feed_afc(frame);
 
         REQUIRE(afc.change_tool(0));
-        CHECK(afc.sent("AFC_SELECT_TOOL TOOL=extruder_b"));
+        CHECK(afc.sent("T0"));
+        CHECK_FALSE(afc.sent_starting_with("AFC_SELECT_TOOL"));
     }
 }
 
