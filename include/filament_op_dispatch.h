@@ -77,6 +77,9 @@ struct BackendCaps {
     /// AmsBackend::load_feeds_filament(): Load is a firmware feed into the
     /// named head, so no other lane needs swapping out first.
     bool load_feeds_filament = false;
+    /// AmsBackend::load_swaps_seated_lane(): Load clears the seated lane itself,
+    /// so a swap is still a Load and never a change_tool().
+    bool load_swaps_seated_lane = false;
 };
 
 /**
@@ -168,7 +171,11 @@ struct BackendCaps {
         // one command per user action and lets the firmware refuse (#1229). An
         // unasked-for eject is the harm that rule exists to prevent, and it is
         // exactly what the old arm did.
-        if (caps.needs_unload_before_load && sys.current_slot != target_slot) {
+        // A backend whose load_filament() clears the seated lane itself (AFC's
+        // `CHANGE_TOOL LANE={n}`) gets the Load: there, change_tool() may only
+        // mount a head and move no filament.
+        if (caps.needs_unload_before_load && !caps.load_swaps_seated_lane &&
+            sys.current_slot != target_slot) {
             const SlotInfo* slot_info = sys.get_slot_global(target_slot);
             if (slot_info && slot_info->mapped_tool >= 0) {
                 return {FilamentTier::AmsBackend, FilamentRefusal::None, AmsCall::ChangeTool,
